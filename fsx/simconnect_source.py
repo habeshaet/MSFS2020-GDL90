@@ -4,8 +4,10 @@ No dependency on the MSFS-oriented PyPI SimConnect package. All native calls
 and dispatch run on the same thread. Explicit units avoid value-based guesses.
 """
 
+from collections import Counter
 import ctypes as C
 from dataclasses import dataclass
+import logging
 import math
 import os
 from pathlib import Path
@@ -34,8 +36,9 @@ DATA = struct.Struct("<" + "d" * len(VARIABLES))
 # dwData starts at byte 40, NOT at the end of a padded ctypes struct.
 HEADER = struct.Struct("<10I")
 REQUEST_ID = DEFINITION_ID = 1
-RECV_EXCEPTION, RECV_QUIT, RECV_SIMOBJECT_DATA = 1, 3, 8
+RECV_EXCEPTION, RECV_OPEN, RECV_QUIT, RECV_SIMOBJECT_DATA = 1, 2, 3, 8
 E_FAIL = 0x80004005  # GetNextDispatch returns E_FAIL for an empty queue.
+LOG = logging.getLogger("fsx.simconnect")
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,22 @@ class SimConnectSource:
         self.handle = C.c_void_p()
         self.latest = None
         self.last_received = None
+        self.received_types = Counter()
+        self.accepted_samples = 0
+        self.ignored_samples = 0
+        self.last_data_header = None
+
+    def diagnostics(self):
+        """Small receive summary for a timeout report; no per-frame log spam."""
+        kinds = ",".join(f"{kind}:{count}" for kind, count in sorted(self.received_types.items()))
+        last = "none"
+        if self.last_data_header is not None:
+            request, object_id, definition, flags, count = self.last_data_header
+            last = (f"request={request}, object={object_id}, definition={definition}, "
+                    f"flags={flags}, count={count}")
+        return (f"OPEN={'yes' if self.received_types[RECV_OPEN] else 'no'}; "
+                f"received_types={kinds or 'none'}; accepted={self.accepted_samples}; "
+                f"ignored={self.ignored_samples}; last_data=[{last}]")
 
     @staticmethod
     def _check(result, operation):
@@ -169,7 +188,11 @@ class SimConnectSource:
         if C.sizeof(C.c_void_p) != 4:
             raise OSError("FSX requires 32-bit (x86) Python, even on 64-bit Windows. "
                           "Use py -3-32 or the full path to your x86 python.exe.")
+        self.received_types.clear()
+        self.accepted_samples = self.ignored_samples = 0
+        self.last_data_header = None
         path = find_dll(self.dll_path)
+        LOG.info("Loading FSX SimConnect: %s", path)
         try:
             self.dll = load_dll(path, use_manifest=self.dll_path is None)
         except OSError as exc:
@@ -189,6 +212,9 @@ class SimConnectSource:
             self._check(self.dll.SimConnect_RequestDataOnSimObject(
                 self.handle, REQUEST_ID, DEFINITION_ID, 0, 3, 0, 0, 0, 0),
                 "RequestDataOnSimObject")  # USER = 0, SIM_FRAME = 3
+            LOG.debug("Requested user-aircraft data: request=%d definition=%d "
+                      "object_alias=0 period=SIM_FRAME fields=%d",
+                      REQUEST_ID, DEFINITION_ID, len(VARIABLES))
         except BaseException:
             self.close()
             raise
@@ -200,6 +226,13 @@ class SimConnectSource:
         if size < 12 or size > len(packet):
             raise OSError("Invalid SimConnect receive size")
         packet = packet[:size]
+        self.received_types[kind] += 1
+        if self.received_types[kind] == 1:
+            LOG.debug("First SimConnect receive type=%d size=%d", kind, size)
+        if kind == RECV_OPEN:
+            if self.received_types[kind] == 1:
+                LOG.info("SimConnect server acknowledged OPEN.")
+            return
         if kind == RECV_QUIT:
             self.latest = None
             raise ConnectionError("FSX closed. Restart FSX, then restart the bridge.")
@@ -209,11 +242,21 @@ class SimConnectSource:
             code, send_id, index = struct.unpack_from("<III", packet, 12)
             raise OSError(f"SimConnect exception {code} (send {send_id}, index {index})")
         if kind != RECV_SIMOBJECT_DATA:
-            return  # e.g. SIMCONNECT_RECV_OPEN
+            return
         if size < HEADER.size:
             raise OSError("Truncated SimConnect data header")
         fields = HEADER.unpack_from(packet)
-        if fields[3:6] != (REQUEST_ID, 0, DEFINITION_ID):
+        header = (fields[3], fields[4], fields[5], fields[6], fields[9])
+        if header != self.last_data_header:
+            LOG.debug("SimConnect data header: request=%d object=%d definition=%d "
+                      "flags=%d count=%d", *header)
+        self.last_data_header = header
+        # Object 0 is the USER alias in the REQUEST, not a required response ID.
+        # FSX returns its actual aircraft ID (often 1, and variable in multiplayer).
+        # This request subscribes ONLY to the user aircraft; correlate using our
+        # request and definition IDs, never a hard-coded server object ID.
+        if fields[3] != REQUEST_ID or fields[5] != DEFINITION_ID:
+            self.ignored_samples += 1
             return
         if fields[6] != 0 or fields[9] != len(VARIABLES):
             raise OSError("Unexpected SimConnect data definition/flags")
@@ -221,6 +264,9 @@ class SimConnectSource:
             raise OSError("Truncated SimConnect flight data")
         self.latest = FlightData.from_values(DATA.unpack_from(packet, HEADER.size))
         self.last_received = now
+        self.accepted_samples += 1
+        if self.accepted_samples == 1:
+            LOG.info("Accepted first FSX flight sample (object ID %d).", fields[4])
 
     def poll(self):
         # Copy before the next native call invalidates the receive buffer.

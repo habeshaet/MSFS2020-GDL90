@@ -14,7 +14,7 @@ if __package__ in (None, ""):
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fsx import protocol as p
+from fsx import __version__, protocol as p
 from fsx.simconnect_source import SimConnectSource
 
 LOG = logging.getLogger("fsx")
@@ -74,7 +74,7 @@ def run(args):
     destinations = [(target, args.port) for target in dict.fromkeys(args.target)]
     try:
         source.connect()
-        LOG.info("SimConnect opened; waiting for FSX flight data.")
+        LOG.info("SimConnect handle opened; waiting for server acknowledgement/flight data.")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             if args.broadcast:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -94,8 +94,10 @@ def run(args):
                         LOG.warning("No fresh FSX data: GPS invalid; position/AHRS suspended.")
                     was_fresh = fresh
                 if data is None and now - started >= 15.0:
-                    raise TimeoutError("No FSX data after 15 seconds. Load/unpause a flight "
-                                       "and check the SimConnect runtime.")
+                    raise TimeoutError(
+                        "No FSX flight data after 15 seconds. Receive diagnostics: "
+                        f"{source.diagnostics()}. Restart with --debug and share "
+                        "the complete log if the loaded flight is unpaused.")
                 utc = time.gmtime()
                 seconds = utc.tm_hour * 3600 + utc.tm_min * 60 + utc.tm_sec
                 for message in stream.packets(data, source.last_received, now, seconds):
@@ -154,6 +156,9 @@ def parser():
     result.add_argument("--broadcast", action="store_true",
                         help="enable broadcast to the EXACT --target address (unicast preferred)")
     result.add_argument("--dll", help="full path to native 32-bit FSX SimConnect.dll")
+    result.add_argument("--debug", action="store_true",
+                        help="log SimConnect request/receive headers for troubleshooting")
+    result.add_argument("--version", action="version", version=f"FSX EFB Connect {__version__}")
     result.add_argument("--rate", type=positive_rate, default=5.0, help="updates/sec (default: 5)")
     result.add_argument("--callsign", type=callsign, default="FSX")
     result.add_argument("--icao", type=icao_address, default=0, help="hex address (default: 000000)")
@@ -173,8 +178,9 @@ def main(argv=None):
         arg_parser.error("--stale-after must be finite and positive")
     if "255.255.255.255" in args.target and not args.broadcast:
         arg_parser.error("Broadcast targets require --broadcast")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s",
-                        datefmt="%H:%M:%S")
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
+                        format="%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
+    LOG.info("FSX EFB Connect %s", __version__)
     try:
         run(args)
     except KeyboardInterrupt:

@@ -53,9 +53,12 @@ def sample():
     return FlightData.from_values(values())
 
 
-def native_packet(data=None, request=1, count=len(VARIABLES)):
+def native_packet(data=None, request=1, count=len(VARIABLES), object_id=1, definition=1):
     body = DATA.pack(*(values() if data is None else data))
-    return HEADER.pack(HEADER.size + len(body), 0, 8, request, 0, 1, 0, 1, 1, count) + body
+    # The response contains a server-assigned object ID, not the request's
+    # SIMCONNECT_OBJECT_ID_USER (0) alias. Single-player commonly returns 1.
+    return HEADER.pack(HEADER.size + len(body), 0, 8, request, object_id,
+                       definition, 0, 1, 1, count) + body
 
 
 class ProtocolTests(unittest.TestCase):
@@ -146,12 +149,47 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(src.latest, sample())
         self.assertEqual(src.last_received, 123)
 
+    def test_user_aircraft_accepts_server_assigned_object_ids(self):
+        for object_id in (0, 1, 42, 0x123456):
+            with self.subTest(object_id=object_id):
+                src = SimConnectSource()
+                src._receive(native_packet(object_id=object_id), 123)
+                self.assertEqual(src.latest, sample())
+                self.assertEqual(src.last_received, 123)
+
+    def test_unrelated_definition_is_ignored_even_for_user_object(self):
+        src = SimConnectSource()
+        src._receive(native_packet(definition=99), 1)
+        self.assertIsNone(src.latest)
+        self.assertIsNone(src.last_received)
+
     def test_unrelated_request_and_open_are_ignored(self):
         src = SimConnectSource()
         src._receive(native_packet(request=99), 1)
         src._receive(struct.pack("<III", 12, 0, 2), 1)
         self.assertIsNone(src.latest)
         self.assertIsNone(src.last_received)
+
+    def test_receive_diagnostics_distinguish_silence_and_ignored_data(self):
+        src = SimConnectSource()
+        self.assertIn("OPEN=no; received_types=none; accepted=0; ignored=0", src.diagnostics())
+        src._receive(struct.pack("<III", 12, 0, 2), 1)
+        src._receive(native_packet(request=99, object_id=42), 1)
+        summary = src.diagnostics()
+        self.assertIn("OPEN=yes; received_types=2:1,8:1; accepted=0; ignored=1", summary)
+        self.assertIn("request=99, object=42, definition=1", summary)
+        src._receive(native_packet(object_id=42), 2)
+        self.assertIn("accepted=1; ignored=1", src.diagnostics())
+        self.assertEqual(src.last_received, 2)
+
+    def test_first_sample_and_header_logs_do_not_repeat_each_frame(self):
+        src = SimConnectSource()
+        with self.assertLogs("fsx.simconnect", level="DEBUG") as logs:
+            for now in (1, 2, 3):
+                src._receive(native_packet(object_id=1), now)
+        self.assertEqual(sum("Accepted first FSX" in line for line in logs.output), 1)
+        self.assertEqual(sum("data header:" in line for line in logs.output), 1)
+        self.assertEqual(src.accepted_samples, 3)
 
     def test_malformed_messages(self):
         src = SimConnectSource()
@@ -246,6 +284,30 @@ class NativeTests(unittest.TestCase):
 
 
 class StreamTests(unittest.TestCase):
+    def test_nonzero_user_object_reaches_valid_gdl90_output(self):
+        src = SimConnectSource()
+        src._receive(native_packet(object_id=1), 1)
+        messages = [unframe(m) for m in bridge.PacketStream().packets(
+            src.latest, src.last_received, 1, 123)]
+        self.assertEqual(messages[0][1] & 0x80, 0x80)
+        self.assertIn(10, [m[0] for m in messages])
+        self.assertTrue(any(m[:2] == b"\x65\x01" for m in messages))
+
+    def test_timeout_reports_receive_diagnostics_and_closes_source(self):
+        args = bridge.parser().parse_args(["--target", "127.0.0.1", "--debug"])
+        with patch.object(bridge, "SimConnectSource") as source, patch.object(
+                bridge.socket, "socket"), patch.object(
+                bridge.time, "monotonic", side_effect=[0, 16]):
+            src = source.return_value
+            src.poll.return_value = None
+            src.last_received = None
+            src.diagnostics.return_value = "OPEN=yes; received_types=2:1; accepted=0"
+            with self.assertLogs("fsx", level="INFO"), self.assertRaisesRegex(
+                    TimeoutError, "Receive diagnostics: OPEN=yes.*Restart with --debug"):
+                bridge.run(args)
+            src.diagnostics.assert_called_once()
+            src.close.assert_called_once()
+
     def test_five_hz_not_divided_by_message_count(self):
         stream = bridge.PacketStream()
         batches = [stream.packets(sample(), 0, t, 0) for t in (0, .201, .402, .603, .804)]

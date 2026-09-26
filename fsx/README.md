@@ -13,6 +13,45 @@ with your app version and enabled external-device configuration.
 weather or traffic. Your EFB must already provide the charts/features you want.
 Do not use simulated data for real flight navigation.
 
+## Update 0.2.0: fix for "SimConnect opened" followed by a 15-second timeout
+
+The initial receive handler incorrectly required the returned aircraft object
+ID to be `0`. That value is the **request alias** for the user aircraft, not a
+required ID in the reply. FSX commonly returns `1`, and the actual ID can vary
+in multiplayer [2](https://www.fsdeveloper.com/forum/threads/who-is-object-id-1.8833/).
+The old check silently discarded those valid samples and could produce a timeout
+even with an active, unpaused flight.
+
+Version **0.2.0** matches replies by our request and data-definition IDs instead.
+The subscription still requests only the user aircraft; it does not accept
+unrelated traffic subscriptions. Regression tests reproduce the old failure and
+verify nonzero object IDs now reach valid GDL90 position/AHRS output. Live FSX
+verification is still needed.
+
+**Replace the entire `fsx` folder with the updated version**, not just the batch
+file. Keep your installed Python and SimConnect runtime. On startup the console
+must show `FSX EFB Connect 0.2.0`. With working data, it will also show:
+
+```text
+SimConnect server acknowledged OPEN.
+Accepted first FSX flight sample (object ID 1).
+Receiving live FSX data.
+```
+
+The actual object ID can differ. If it still times out, start from Command
+Prompt in the repository/extracted folder:
+
+```bat
+fsx\start_fsx.bat --debug
+```
+
+Share the full output, starting with the version and DLL path. The timeout now
+includes receive diagnostics: whether the server acknowledged OPEN, received
+message types/counts, accepted/ignored sample counts, and the last data header.
+`OPEN=yes` with only type `2` means the server handshake arrived but no aircraft
+data messages did. Type `8` is an aircraft-data response. A successful
+`SimConnect_Open` call alone is not proof that aircraft samples are arriving.
+
 ## Why a different FSX client?
 
 The original script imports `SimConnect` from PyPI. MSFS-oriented wrappers can
@@ -191,7 +230,8 @@ Its inclusion does not guarantee that every FD Pro X version will accept it.
   when fresh samples arrive. `--stale-after` adjusts this threshold. An EFB may
   retain its last displayed position briefly; the bridge does not fabricate
   zero coordinates or keep marking stale data valid.
-- If no first sample arrives within 15 seconds, the program exits with an error.
+- If no first sample arrives within 15 seconds, the program exits with an error
+  including receive diagnostics. Use `--debug` for request and header logging.
   A simulator quit or SimConnect exception also stops it. Restart the bridge
   after restarting FSX; automatic reconnect is not implemented. Pausing FSX may
   suspend frame updates and trigger the stale-data behavior.
@@ -205,6 +245,7 @@ Its inclusion does not guarantee that every FD Pro X version will accept it.
 | `FSX requires 32-bit (x86) Python` / WinError 193 | Verify the chosen interpreter prints 32; do not load a 64-bit MSFS DLL or managed .NET DLL. |
 | Runtime not found / WinError 126 or 14001 / side-by-side error | Install/repair the FSX-XPACK `SimConnect.msi` and its prerequisites. Keep `SimConnect.manifest` beside the source. A DLL alone may lack its native runtime dependencies. |
 | `SimConnect_Open ... 0x80004005` | Start FSX, load a flight, verify the matching runtime. Remove unintended remote `SimConnect.cfg` settings from your launch directory. |
+| `SimConnect opened` then a 15-second timeout on an unpaused flight | Replace the whole `fsx` folder with version 0.2.0 or newer to fix rejection of nonzero aircraft object IDs. If it persists, run `fsx\start_fsx.bat --debug` and share the entire log, including receive diagnostics. Do not reinstall Python solely because of this timeout. |
 | No data / invalid GPS | Unpause/load a flight; inspect the console for a SimConnect exception. No valid packets are sent without a complete sample. |
 | Console data correct, EFB disconnected | Verify iPad IP, UDP port, Local Network permission, private-network firewall rule, app foreground state, and Wi-Fi isolation/VPN settings. Prefer unicast. Stop other bridges/receivers competing for the EFB data source. |
 | Position works, attitude missing/reversed | Try `--ahrs foreflight` for ForeFlight or `--ahrs legacy` for the original compatibility behavior. Verify app feature entitlement/settings and compare left/right bank with the FSX instruments. Record which mode/app version fails. |
