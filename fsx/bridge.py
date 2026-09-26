@@ -68,22 +68,37 @@ class PacketStream:
         return messages
 
 
-def run(args):
+def run(args, stop_event=None, on_sample=None, on_state=None):
+    """Run on one thread; callbacks must not access Tk widgets directly.
+
+    CLI callers may omit the optional controls. A GUI requests stop via an
+    Event; this thread alone owns and closes both native and UDP resources.
+    """
     source = SimConnectSource(args.dll)
     stream = PacketStream(args.rate, args.stale_after, args.callsign, args.icao, args.ahrs)
     destinations = [(target, args.port) for target in dict.fromkeys(args.target)]
     try:
+        if stop_event is not None and stop_event.is_set():
+            return
+        if on_state:
+            on_state("connecting")
         source.connect()
+        if stop_event is not None and stop_event.is_set():
+            return
         LOG.info("SimConnect handle opened; waiting for server acknowledgement/flight data.")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            if getattr(args, "bind_ip", None):
+                sock.bind((args.bind_ip, 0))
+                LOG.info("Using local network address %s", args.bind_ip)
             if args.broadcast:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            LOG.info("Sending to %s at %.1f Hz; AHRS=%s. Ctrl+C stops.",
+            LOG.info("Sending to %s at %.1f Hz; AHRS=%s.",
                      destinations, args.rate, args.ahrs)
             started = time.monotonic()
             last_log = 0.0
             was_fresh = None
-            while True:
+            next_sample = 0.0
+            while stop_event is None or not stop_event.is_set():
                 data = source.poll()
                 now = time.monotonic()
                 fresh = stream.is_fresh(data, source.last_received, now)
@@ -93,6 +108,11 @@ def run(args):
                     else:
                         LOG.warning("No fresh FSX data: GPS invalid; position/AHRS suspended.")
                     was_fresh = fresh
+                    if on_state:
+                        on_state("live" if fresh else "waiting" if data is None else "stale")
+                if fresh and on_sample and now >= next_sample:
+                    on_sample(data)
+                    next_sample = now + 0.2
                 if data is None and now - started >= 15.0:
                     raise TimeoutError(
                         "No FSX flight data after 15 seconds. Receive diagnostics: "
@@ -109,7 +129,10 @@ def run(args):
                              data.lat, data.lon, data.alt_ft, data.gs_kt,
                              data.hdg_true, data.pitch, data.roll)
                     last_log = now
-                time.sleep(0.01)
+                if stop_event is None:
+                    time.sleep(0.01)
+                else:
+                    stop_event.wait(0.01)
     finally:
         source.close()
 
@@ -155,6 +178,8 @@ def parser():
     result.add_argument("--port", type=int, default=4000, help="EFB UDP port (default: 4000)")
     result.add_argument("--broadcast", action="store_true",
                         help="enable broadcast to the EXACT --target address (unicast preferred)")
+    result.add_argument("--bind-ip", type=ipv4,
+                        help="local adapter IPv4 to send from (normally selected by the OS)")
     result.add_argument("--dll", help="full path to native 32-bit FSX SimConnect.dll")
     result.add_argument("--debug", action="store_true",
                         help="log SimConnect request/receive headers for troubleshooting")
@@ -167,6 +192,25 @@ def parser():
     result.add_argument("--stale-after", type=float, default=2.0,
                         help="suspend flight data after this many seconds without updates (default: 2)")
     return result
+
+
+def connection_options(ip, port, callsign_text, rate, ahrs, broadcast, bind_ip=None):
+    """Validate GUI input without argparse printing to a nonexistent EXE console."""
+    port = int(port)
+    if not 1 <= port <= 65535:
+        raise ValueError("Port must be between 1 and 65535.")
+    if ahrs not in ("both", "foreflight", "legacy"):
+        raise ValueError("Choose a supported AHRS mode.")
+    target = ipv4(ip.strip())
+    if target == "255.255.255.255" and not broadcast:
+        raise ValueError("Enable broadcast for a broadcast target.")
+    return argparse.Namespace(
+        target=[target], port=port, callsign=callsign(callsign_text),
+        rate=positive_rate(rate), ahrs=ahrs, broadcast=broadcast,
+        bind_ip=ipv4(bind_ip) if bind_ip else None,
+        icao=0, dll=None, stale_after=2.0, debug=False,
+    )
+
 
 
 def main(argv=None):

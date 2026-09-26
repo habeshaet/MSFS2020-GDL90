@@ -1,0 +1,2 @@
+# Bundled into the EXE; the original CLI still needs only the standard library.
+psutil>=6.1,<8

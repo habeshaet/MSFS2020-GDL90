@@ -1,19 +1,69 @@
 # FSX → FD Pro X / ForeFlight bridge
 
-A separate, standard-library-only Python bridge for **FSX SP2 / Acceleration
-and FSX: Steam Edition on Windows**. It sends simulated ownship position and
-attitude over UDP. The original MSFS `.py` and `.exe` files are untouched.
+A separate Python bridge for **FSX SP2 / Acceleration and FSX: Steam Edition
+on Windows**. It sends simulated ownship position and attitude over UDP. The
+original MSFS Python connector is unchanged. The CLI uses only the standard
+library; the desktop GUI adds psutil for network-adapter discovery.
 
-**Status:** offline packet, mocked SimConnect, scheduling and local UDP tests
-pass. Live Windows/FSX and iPad interoperability have **not** been tested in this
-repository's Linux development environment. FD Pro X behavior must be checked
-with your app version and enabled external-device configuration.
+**Status:** the user has confirmed the 0.2 CLI works with their FSX setup.
+Version **0.3.0** adds a desktop interface, automatic subnet broadcast selection,
+and Windows EXE build scripts. Those new Windows paths still require live
+validation. Offline protocol, receive-handler, network calculation, worker
+lifecycle and build-command tests are included.
 
 **Simulation use only.** This supplies telemetry, not charts, subscriptions,
 weather or traffic. Your EFB must already provide the charts/features you want.
 Do not use simulated data for real flight navigation.
 
-## Update 0.2.0: fix for "SimConnect opened" followed by a 15-second timeout
+## Desktop app and EXE (0.3.0)
+
+**Want an EXE instead of a batch launcher?** Double-click **`fsx/build_exe.bat`**
+on Windows. It finds your 32-bit Python and builds:
+
+```text
+fsx\dist\FSX - EFB Connect.exe
+```
+
+After that, just double-click the EXE. It bundles Python, Tk, psutil and the
+activation manifest, so Python is not needed to run it. Your existing FSX
+SimConnect runtime is still required. **[Full build/use instructions](BUILD_WINDOWS.md)**
+include the no-`py`-launcher option and troubleshooting.
+
+The desktop interface reuses the MSFS connector's dark palette, sidebar,
+status indicator and live data badges. Start/Stop, errors and telemetry run
+through a thread-safe queue; the UI never calls SimConnect from its Tk thread.
+
+Automatic mode uses the chosen active adapter's IP **and netmask**:
+
+| PC address | Mask | Automatic target |
+| --- | --- | --- |
+| `192.168.1.13` | `255.255.255.0` | `192.168.1.255` |
+| `192.168.1.13` | `255.255.0.0` | `192.168.255.255` |
+| `192.168.1.13` | `255.255.255.128` | `192.168.1.127` |
+
+The default-route adapter is preferred when available. Choose Wi-Fi/Ethernet
+explicitly if a VPN or another adapter is selected. The sender binds to the
+chosen local IP. Detection runs on launch and **Refresh**; stop and refresh
+after changing networks. No usable adapter means Auto cannot start: the app
+does not guess a `/24` mask or silently send a global broadcast.
+
+Manual unicast remains available: disable Auto and Broadcast and enter the
+iPad IP. This can be more reliable for ForeFlight than broadcast. The CLI
+continues working unchanged, with an optional `--bind-ip` to choose its local
+source address.
+
+To run the GUI from source instead of building (from the repository root):
+
+```bat
+py -3-32 -m pip install -r fsx\requirements-gui.txt
+py -3-32 -m fsx.gui
+```
+
+Use your x86 interpreter's full path if `py` is unavailable. EXE builds must
+run on Windows; this repository supplies source/build scripts, not a Windows
+binary built in the Linux sandbox.
+
+## Earlier fix (0.2.0): "SimConnect opened" followed by a 15-second timeout
 
 The initial receive handler incorrectly required the returned aircraft object
 ID to be `0`. That value is the **request alias** for the user aircraft, not a
@@ -25,12 +75,12 @@ even with an active, unpaused flight.
 Version **0.2.0** matches replies by our request and data-definition IDs instead.
 The subscription still requests only the user aircraft; it does not accept
 unrelated traffic subscriptions. Regression tests reproduce the old failure and
-verify nonzero object IDs now reach valid GDL90 position/AHRS output. Live FSX
-verification is still needed.
+verify nonzero object IDs now reach valid GDL90 position/AHRS output. This fix
+remains in the 0.3 desktop app and CLI.
 
 **Replace the entire `fsx` folder with the updated version**, not just the batch
 file. Keep your installed Python and SimConnect runtime. On startup the console
-must show `FSX EFB Connect 0.2.0`. With working data, it will also show:
+must show `FSX EFB Connect 0.3.0` for the current version. With working data, it will also show:
 
 ```text
 SimConnect server acknowledged OPEN.
@@ -267,7 +317,8 @@ On Windows with your real FSX/EFB setup:
 
 ## Offline developer tests
 
-From the repository root (any OS/Python 3.9+, no external packages):
+From the repository root (any OS/Python 3.9+; core tests need no external packages,
+Tk interaction tests skip if Tkinter or a display is unavailable):
 
 ```sh
 python -m unittest discover -s fsx/tests -v
@@ -278,6 +329,10 @@ python -m fsx.bridge --help
 Tests cover GDL90 CRC/escaping, packet fields and attitude conventions,
 SimConnect binary dispatch layout, malformed data and failures, stale-data
 handling, 5 Hz scheduling, cleanup, CLI validation, and local UDP transmission.
+Desktop tests cover subnet masks, active adapters, multiple interfaces,
+source-address binding, cooperative worker shutdown and packaging arguments.
+When Tk/display are available, they also exercise Auto/manual controls,
+queued live data and UI recovery after a connection failure.
 They do not execute the Windows batch launcher or replace live validation of
 Windows DLL loading or the EFB display. On Windows, also check launcher startup
 with (1) no `py` command and a standard x86 installation, (2) only 64-bit Python,

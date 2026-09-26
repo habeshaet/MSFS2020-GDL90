@@ -4,3 +4,6 @@ __pycache__/
 *.dll
 *.exe
 *.msi
+build/
+dist/
+*.spec
