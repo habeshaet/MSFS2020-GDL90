@@ -27,17 +27,33 @@ assembly, and explicit FSX variable units. No `pip install SimConnect`, FSUIPC,
 
 ## 1. Windows prerequisites
 
-1. Install **32-bit (x86) Python 3.9 or newer** appropriate for your Windows
-   version. For example, the Python 3.13 Windows **32-bit** installer. Include
-   the Python launcher. You can keep your existing 64-bit Python alongside it.
-2. Verify the interpreter from Command Prompt:
+1. **Keep your existing 64-bit Python installed.** Install **32-bit (x86)
+   Python 3.9 or newer** alongside it in a **different folder**. For example,
+   use a Python 3.13 Windows **32-bit** installer from python.org, not the
+   64-bit or ARM64 installer. A typical per-user installation folder is
+   `%LocalAppData%\Programs\Python\Python313-32`.
+
+   You can leave **Add Python to PATH unchecked** to avoid changing which
+   Python your existing tools use. The `py` launcher is optional, and you do
+   not need to uninstall, replace or modify your 64-bit Python/MSFS setup.
+2. Verify the interpreter from **Command Prompt** using its full path (adjust
+   the folder to match your installation):
+
+   ```bat
+   "%LocalAppData%\Programs\Python\Python313-32\python.exe" -c "import struct; print(struct.calcsize('P') * 8)"
+   ```
+
+   This must print `32`. If you have the `py` launcher, this also works:
 
    ```bat
    py -3-32 -c "import struct; print(struct.calcsize('P') * 8)"
    ```
 
-   This must print `32`. If the launcher does not find it, use the full path to
-   your x86 `python.exe` in place of `py -3-32` in all commands below.
+   If `py` is not recognized, **that only means the launcher is unavailable**.
+   Use the full path to your x86 `python.exe` in place of `py -3-32` in all
+   commands below, or use the updated `start_fsx.bat`. A 64-bit Python cannot
+   load the native 32-bit FSX DLL in the same process; a 64-bit virtual
+   environment does not change that.
 3. Install the **FSX SP2/Acceleration SimConnect redistributable** from your
    licensed FSX media/SDK. For Steam Edition, the usual installer is:
 
@@ -81,9 +97,28 @@ SDK DLL, but other runtime versions are not validated.
    py -3-32 -m fsx.bridge --target 192.168.1.42
    ```
 
-   Or double-click **`fsx\start_fsx.bat`** and enter the iPad address.
-   Stop with **Ctrl+C**. The console should report `Receiving live FSX data`
-   and show position, altitude, heading, pitch and roll.
+   Or double-click **`fsx\start_fsx.bat`** and enter the iPad address. The
+   launcher checks for a compatible 32-bit Python before asking for the IP.
+   It tries the optional `py` launcher, standard Python installation folders,
+   and then `python.exe` on PATH. It rejects 64-bit interpreters.
+
+   For a custom installation folder, set an explicit override in Command
+   Prompt before starting it (do not put extra quotes inside the value):
+
+   ```bat
+   set "FSX_PYTHON=C:\MyPython32\python.exe"
+   fsx\start_fsx.bat
+   ```
+
+   Without either launcher, you can run directly from the repository root:
+
+   ```bat
+   "%LocalAppData%\Programs\Python\Python313-32\python.exe" -m fsx.bridge --target 192.168.1.16
+   ```
+
+   Replace the Python path and iPad address as needed. Stop with **Ctrl+C**.
+   The console should report `Receiving live FSX data` and show position,
+   altitude, heading, pitch and roll.
 
 Default UDP port is **4000**. Unicast is preferred: ForeFlight explicitly warns
 that iOS can lose broadcast packets [1](https://www.foreflight.com/connect/spec/).
@@ -165,7 +200,9 @@ Its inclusion does not guarantee that every FD Pro X version will accept it.
 
 | Symptom | Check |
 | --- | --- |
-| `FSX requires 32-bit (x86) Python` / WinError 193 | Verify `py -3-32` prints 32; do not load a 64-bit MSFS DLL or managed .NET DLL. |
+| `'py' is not recognized` | The optional Python launcher is missing. Keep 64-bit Python, install x86 Python alongside it, then use the updated batch file or the full path to the x86 `python.exe`. No PATH change is necessary. |
+| Batch file cannot find an existing x86 Python | Set `FSX_PYTHON` to its full executable path. The override must be Python 3.9+ and 32-bit; an invalid override produces an error rather than silently choosing something else. |
+| `FSX requires 32-bit (x86) Python` / WinError 193 | Verify the chosen interpreter prints 32; do not load a 64-bit MSFS DLL or managed .NET DLL. |
 | Runtime not found / WinError 126 or 14001 / side-by-side error | Install/repair the FSX-XPACK `SimConnect.msi` and its prerequisites. Keep `SimConnect.manifest` beside the source. A DLL alone may lack its native runtime dependencies. |
 | `SimConnect_Open ... 0x80004005` | Start FSX, load a flight, verify the matching runtime. Remove unintended remote `SimConnect.cfg` settings from your launch directory. |
 | No data / invalid GPS | Unpause/load a flight; inspect the console for a SimConnect exception. No valid packets are sent without a complete sample. |
@@ -200,7 +237,11 @@ python -m fsx.bridge --help
 Tests cover GDL90 CRC/escaping, packet fields and attitude conventions,
 SimConnect binary dispatch layout, malformed data and failures, stale-data
 handling, 5 Hz scheduling, cleanup, CLI validation, and local UDP transmission.
-They do not replace live validation of Windows DLL loading or the EFB display.
+They do not execute the Windows batch launcher or replace live validation of
+Windows DLL loading or the EFB display. On Windows, also check launcher startup
+with (1) no `py` command and a standard x86 installation, (2) only 64-bit Python,
+(3) a custom `FSX_PYTHON` path containing spaces, and (4) an invalid or 64-bit
+`FSX_PYTHON` override. Cases 2 and 4 must stop with setup instructions.
 
 Packet encoders are adapted from Daniel Aregay's original script in this
 repository. Additional references:
