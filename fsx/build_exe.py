@@ -27,6 +27,12 @@ def pyinstaller_command(python, folder):
     ]
 
 
+def dependency_install_command(python, folder):
+    """Use published wheels only: building the app must not need a C++ SDK."""
+    return [str(python), "-m", "pip", "install", "--only-binary=:all:",
+            "-r", str(Path(folder) / "requirements-build.txt")]
+
+
 def main():
     if os.name != "nt" or ctypes.sizeof(ctypes.c_void_p) != 4:
         print("Build on Windows with 32-bit Python 3.9+ (keep your 64-bit Python installed).")
@@ -51,8 +57,8 @@ def main():
         subprocess.run([str(python), "-c",
                         "import struct,sys; sys.exit(0 if struct.calcsize('P') == 4 "
                         "and sys.version_info >= (3,9) else 1)"], check=True)
-        subprocess.run([str(python), "-m", "pip", "install", "-r",
-                        str(folder / "requirements-build.txt")], check=True)
+        print("Installing prebuilt dependencies only (no C/C++ compiler required)…", flush=True)
+        subprocess.run(dependency_install_command(python, folder), check=True)
         subprocess.run(pyinstaller_command(python, folder), check=True, cwd=folder.parent)
         output = folder / "dist" / "FSX - EFB Connect.exe"
         if not output.is_file():
@@ -63,6 +69,9 @@ def main():
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"\nBuild failed: {exc}")
         print("Read the error above. Check Internet access for pip and the x86 Python installation.")
+        print("Dependencies must have prebuilt wheels. If pip reports no matching distribution,")
+        print("use the supplied requirements files and a package index with Windows x86 wheels.")
+        print("Do not remove --only-binary or install a C++ SDK to work around a missing wheel.")
         print("If an old build environment is incompatible, remove fsx\\.venv\\build-exe and retry.")
         return 1
 

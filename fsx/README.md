@@ -7,9 +7,11 @@ library; the desktop GUI adds psutil for network-adapter discovery.
 
 **Status:** the user has confirmed the 0.2 CLI works with their FSX setup.
 Version **0.3.0** adds a desktop interface, automatic subnet broadcast selection,
-and Windows EXE build scripts. Those new Windows paths still require live
-validation. Offline protocol, receive-handler, network calculation, worker
-lifecycle and build-command tests are included.
+and Windows EXE build scripts. **0.3.1** fixes the x86 dependency installation by
+pinning a psutil release with a verified Windows 32-bit wheel and refusing local
+source compilation. The new GUI and EXE still require live Windows validation.
+Offline protocol, receive-handler, network calculation, worker lifecycle and
+build-command tests are included.
 
 **Simulation use only.** This supplies telemetry, not charts, subscriptions,
 weather or traffic. Your EFB must already provide the charts/features you want.
@@ -27,7 +29,9 @@ fsx\dist\FSX - EFB Connect.exe
 After that, just double-click the EXE. It bundles Python, Tk, psutil and the
 activation manifest, so Python is not needed to run it. Your existing FSX
 SimConnect runtime is still required. **[Full build/use instructions](BUILD_WINDOWS.md)**
-include the no-`py`-launcher option and troubleshooting.
+include the no-`py`-launcher option and troubleshooting. If an older build fails
+compiling `psutil` with a missing `basetsd.h`, see the **0.3.1 fix** at the top
+of that guide: use `psutil==7.1.1` and prebuilt wheels, not a C++ compiler.
 
 The desktop interface reuses the MSFS connector's dark palette, sidebar,
 status indicator and live data badges. Start/Stop, errors and telemetry run
@@ -80,7 +84,7 @@ remains in the 0.3 desktop app and CLI.
 
 **Replace the entire `fsx` folder with the updated version**, not just the batch
 file. Keep your installed Python and SimConnect runtime. On startup the console
-must show `FSX EFB Connect 0.3.0` for the current version. With working data, it will also show:
+must show `FSX EFB Connect 0.3.1` for the current version. With working data, it will also show:
 
 ```text
 SimConnect server acknowledged OPEN.

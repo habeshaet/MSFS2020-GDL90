@@ -1,5 +1,32 @@
 # Build FSX EFB Connect as a Windows EXE
 
+## 0.3.1 fix: psutil compilation / missing `basetsd.h`
+
+If your earlier build downloaded `psutil-7.2.2.tar.gz` and failed while running
+`cl.exe` with a missing `basetsd.h`, pip had fallen back to **compiling psutil
+from source**. Python was detected correctly; do not reinstall Python or repair
+Visual Studio just to build this app.
+
+The updated requirements pin **`psutil==7.1.1`**, whose published
+`psutil-7.1.1-cp37-abi3-win32.whl` was verified downloadable for Windows x86
+Python 3.11 and 3.13. The builder now installs **only prebuilt wheels**, so a
+missing wheel produces a clear pip error instead of invoking a C++ compiler.
+
+For an existing download, the quick fix is to replace `fsx/requirements-gui.txt`
+with these contents and rerun **`build_exe.bat`**:
+
+```text
+--only-binary=psutil
+psutil==7.1.1
+```
+
+Or use the complete updated 0.3.1 source package, which also enforces wheel-only
+installation for all build dependencies. **You can reuse the failed build's
+`fsx/.venv/build-exe` folder.** No deletion or manual pip upgrade is needed for
+this particular error. Look for a `psutil-7.1.1-...-win32.whl` download, not a
+`.tar.gz` archive. This verifies package availability, not execution of the
+Windows EXE in the Linux development environment.
+
 ## Easiest method — build once, then just double-click the EXE
 
 Your working **32-bit Python** and **FSX SimConnect runtime** can stay installed.
@@ -99,8 +126,11 @@ firewall/antivirus protection to run the app.
 - PyInstaller's temporary files/spec go in `fsx/build`; the final EXE goes in
   `fsx/dist`. All build outputs and environments are ignored by Git.
 - The initial build needs network access for pip. Subsequent builds can reuse
-  installed dependencies. If pip fails, read its error for proxy/network or
-  Python-version compatibility details.
+  installed dependencies. Dependencies are installed with `--only-binary=:all:`;
+  no local C/C++ compiler is needed. If pip reports no matching distribution,
+  check the pinned requirements, Python version and access to an index/mirror
+  containing Windows x86 wheels. Do not remove the wheel-only protection as a
+  workaround. Other pip failures may indicate proxy/network issues.
 - If an old build environment is incompatible, delete only
   `fsx/.venv/build-exe` and rebuild.
 - This is an **unsigned** local build. Windows may show a publisher/reputation

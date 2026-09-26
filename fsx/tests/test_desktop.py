@@ -138,6 +138,21 @@ class WorkerTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def test_dependency_install_never_falls_back_to_a_c_compiler(self):
+        folder = Path(__file__).resolve().parents[1]
+        command = build_exe.dependency_install_command("x86-python.exe", folder)
+        self.assertEqual(command, [
+            "x86-python.exe", "-m", "pip", "install", "--only-binary=:all:",
+            "-r", str(folder / "requirements-build.txt")])
+
+    def test_gui_requirements_pin_psutil_and_require_its_wheel(self):
+        folder = Path(__file__).resolve().parents[1]
+        lines = (folder / "requirements-gui.txt").read_text().splitlines()
+        self.assertIn("--only-binary=psutil", lines)
+        requirements = [line for line in lines if line.startswith("psutil")]
+        self.assertEqual(len(requirements), 1)
+        self.assertRegex(requirements[0], r"^psutil==\d+\.\d+\.\d+$")
+
     def test_windowed_single_file_build_bundles_manifest_in_package(self):
         folder = Path(__file__).resolve().parents[1]
         command = build_exe.pyinstaller_command("x86-python.exe", folder)

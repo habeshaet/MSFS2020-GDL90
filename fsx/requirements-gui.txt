@@ -1,2 +1,5 @@
 # Bundled into the EXE; the original CLI still needs only the standard library.
-psutil>=6.1,<8
+# Keep a release with a published cp37-abi3-win32 wheel for the FSX x86 build.
+# Do not silently fall back to a local C/C++ compilation.
+--only-binary=psutil
+psutil==7.1.1
